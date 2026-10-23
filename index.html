@@ -182,7 +182,8 @@ footer{text-align:center;color:var(--mut);font-size:.78rem;padding:10px 0 30px}
    <span class="wm">afya</span>
   </div>
   <div class="sp"></div>
-  <button class="btn p" id="upd" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg><span>Atualizar planilha</span></button>
+  <button class="btn" id="gen" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span>Gerar data.json</span></button>
+  <button class="btn p" id="upd"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg><span>Atualizar planilha</span></button>
   <input id="file" type="file" accept=".xlsx,.xls,.csv" hidden>
  </div>
 </header>
@@ -191,15 +192,15 @@ footer{text-align:center;color:var(--mut);font-size:.78rem;padding:10px 0 30px}
  <div class="hero-in">
   <div class="eyebrow"><i></i>Marketing · Criação</div>
   <h1>Dashboard de Criações</h1>
-  <div class="meta" id="meta">Carregando dados…</div>
+  <div class="meta" id="meta">Nenhuma planilha carregada</div>
  </div>
 </section>
 
 <main>
-<div id="drop" style="display:none">
+<div id="drop">
  <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg></div>
  <b>Clique ou arraste a planilha aqui</b> (.xlsx, .xls ou .csv)
- <div class="hint">Depois de enviada, a planilha fica disponível em tempo real para todos que abrirem este link. Para atualizar, é só enviar de novo.</div>
+ <div class="hint">Os dados são lidos no seu navegador e ficam salvos nele. Para atualizar, é só enviar a planilha de novo.</div>
 </div>
 <div id="err" class="msg"></div>
 <section id="dash">
@@ -349,83 +350,57 @@ function setSheet(name){
  fillSel($("fU"),DATA.map(r=>r.un));fillSel($("fS"),DATA.map(r=>r.se));
  ["fA","fB"].forEach(i=>$(i).value="");
  render();}
-
-let DBH=null,CAN=false,curV=null,LIVE=false;
 function show(def){
  $("fSh").innerHTML=Object.keys(S).map(n=>`<option${n===def?" selected":""}>${esc(n)}</option>`).join("");
- $("drop").style.display="none";$("dash").style.display="block";
- $("meta").textContent="Arquivo: "+META.f+" · atualizado em "+new Date(META.at).toLocaleString("pt-BR")+(LIVE?" · ao vivo":"");
+ $("drop").style.display="none";$("dash").style.display="block";$("gen").style.display="";
+ $("meta").textContent="Arquivo: "+META.f+" · atualizado em "+new Date(META.at).toLocaleString("pt-BR");
  setSheet(def);}
+const AUTO="DADOS_MARKETING.xlsx";
 function load(file){
- if(!CAN)return;
  $("err").textContent="";
  const rd=new FileReader();
  rd.onload=e=>ingest(e.target.result,file.name);
  rd.readAsArrayBuffer(file);}
-async function ingest(buf,name){
- try{
+function ingest(buf,name){
+ {try{
   const wb=XLSX.read(new Uint8Array(buf),{type:"array",cellDates:true});
   const ns={};
   wb.SheetNames.forEach(n=>{if(info(wb.Sheets[n])){const p=parse(wb.Sheets[n]);if(p.length)ns[n]=p;}});
   const ok=Object.keys(ns);
   if(!ok.length)throw new Error("Nenhuma aba com as colunas UNIDADE, SETOR e DESIGNER (ou NOME).");
+  S=ns;META={f:name,at:Date.now()};
   const def=[...ok].reverse().find(n=>/^\d{4}$/.test(n))||ok[0];
-  if(DBH){await publish(ns,def,name);$("err").textContent="";}
-  else{S=ns;META={f:name,at:Date.now()};show(def);}
- }catch(x){$("err").textContent="Erro: "+(x.message||x.code||x);$("meta").textContent=META.f?("Arquivo: "+META.f):"Falha ao enviar";}}
+  ss(KEY,JSON.stringify({sheets:S,def,f:META.f,at:META.at}));
+  show(def);
+ }catch(x){$("err").textContent="Erro: "+x.message;}}}
+/* Busca automática da planilha na mesma pasta do site (funciona quando hospedado em http/https) */
+function fromJson(o){
+ S=o.sheets;Object.values(S).forEach(a=>a.forEach(r=>r.dt=r.dt?new Date(r.dt):null));
+ META={f:o.f,at:o.at};
+ ss(KEY,JSON.stringify({sheets:S,def:o.def,f:o.f,at:o.at}));
+ show(o.def);}
+async function auto(){
+ try{
+  const j=await fetch("data.json?v="+Date.now(),{cache:"no-store"});
+  if(j.ok){fromJson(await j.json());return true;}
+ }catch(e){}
+ try{
+  const res=await fetch(AUTO+"?v="+Date.now(),{cache:"no-store"});
+  if(!res.ok)return false;
+  ingest(await res.arrayBuffer(),AUTO);
+  return true;
+ }catch(e){return false;}}
 
-/* ---------- Banco compartilhado (tempo real) ---------- */
-async function publish(ns,def,name){
- $("meta").textContent="Publicando planilha para todos…";
- const v=Date.now(),sheets=Object.keys(ns),writes=[];
- sheets.forEach((n,si)=>{
-  let cur=[],size=0,i=0;
-  const flush=()=>{if(cur.length){writes.push(["v"+v+"_"+si+"_"+(i++),{v,s:n,rows:cur}]);cur=[];size=0;}};
-  ns[n].forEach(r=>{
-   const row=[r.un,r.se,r.de,r.q,Math.max(TIPOS.indexOf(r.t),0),r.dt?r.dt.getTime():0],l=JSON.stringify(row).length+1;
-   if(size+l>180000)flush();cur.push(row);size+=l;});
-  flush();});
- for(const [id,d] of writes){await DBH.doc("chunks/"+id).set(d);}
- await DBH.doc("dash/meta").set({v,f:name,at:v,def,sheets});
- try{const old=await DBH.collection("chunks").where("v","!=",v).get();
-  for(const d of old.docs){await DBH.doc("chunks/"+d.id).delete();}}catch(e){}
-}
-async function loadVersion(m){
- if(!m||!m.v||curV===m.v)return;curV=m.v;
- const snap=await DBH.collection("chunks").where("v","==",m.v).get();
- const ns={};(m.sheets||[]).forEach(n=>ns[n]=[]);
- snap.docs.forEach(d=>{const x=d.data();const arr=ns[x.s]||(ns[x.s]=[]);
-  x.rows.forEach(r=>arr.push({un:r[0],se:r[1],de:r[2],q:r[3],t:TIPOS[r[4]]||"Outros",dt:r[5]?new Date(r[5]):null}));});
- const keep={sh:$("fSh").value,u:$("fU").value,s:$("fS").value,a:$("fA").value,b:$("fB").value};
- S=ns;META={f:m.f,at:m.at};LIVE=true;
- const def=(keep.sh&&S[keep.sh])?keep.sh:(S[m.def]?m.def:Object.keys(S)[0]);
- show(def);
- const has=(id,val)=>val&&[...$(id).options].some(o=>o.value===val);
- if(has("fU",keep.u))$("fU").value=keep.u;
- if(has("fS",keep.s))$("fS").value=keep.s;
- $("fA").value=keep.a||"";$("fB").value=keep.b||"";
- render();}
-function noData(){
- $("dash").style.display="none";
- if(CAN){$("drop").style.display="";$("meta").textContent="Nenhuma planilha enviada ainda";}
- else{$("meta").textContent="Aguardando a primeira planilha ser publicada…";}}
-async function init(){
- let U=null;
- try{if(window.claude&&claude.use){DBH=await claude.use("db");U=await claude.use("user");}}catch(e){DBH=null;}
- if(!DBH){CAN=true;LIVE=false;}
- else{try{CAN=U?!!(await U.canEdit()):false;}catch(e){CAN=false;}}
- $("upd").style.display=CAN?"":"none";
- if(!DBH){$("meta").textContent="Modo local (sem compartilhamento) · envie uma planilha";$("err").textContent="⚠ Esta página NÃO está conectada ao banco compartilhado: o que você enviar aqui só aparece para você. Abra pelo link https://claude.ai/artifact/6e783598iA2452gxwpZSTK (logado no Claude) para publicar para todos.";$("drop").style.display="";return;}
- DBH.doc("dash/meta").onSnapshot(s=>{
-  if(s.exists){$("err").textContent="";loadVersion(s.data()).catch(e=>{$("err").textContent="Erro ao carregar dados: "+(e.message||e.code);});}
-  else noData();
- },e=>{$("err").textContent="Sem acesso aos dados compartilhados ("+(e.code||"erro")+").";});
-}
+$("gen").onclick=()=>{
+ const def=$("fSh").value||Object.keys(S)[0];
+ const blob=new Blob([JSON.stringify({sheets:S,def,f:META.f,at:META.at})],{type:"application/json"});
+ const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="data.json";
+ document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
 const inp=$("file"),drop=$("drop");
 $("upd").onclick=()=>inp.click();
 drop.onclick=()=>inp.click();
 inp.onchange=()=>{if(inp.files[0])load(inp.files[0]);inp.value="";};
-window.addEventListener("dragover",e=>{e.preventDefault();if(CAN)drop.classList.add("over")});
+window.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("over")});
 window.addEventListener("dragleave",()=>drop.classList.remove("over"));
 window.addEventListener("drop",e=>{e.preventDefault();drop.classList.remove("over");if(e.dataTransfer.files[0])load(e.dataTransfer.files[0]);});
 ["fU","fS","fA","fB"].forEach(id=>$(id).onchange=render);
@@ -434,7 +409,11 @@ function applyDes(){const on=$("tgD").checked;$("dash").classList.toggle("nodes"
 $("tgD").checked=sg(DK)==="1";$("tgD").onchange=applyDes;applyDes();
 $("fSh").onchange=()=>setSheet($("fSh").value);
 $("clr").onclick=()=>{["fU","fS","fA","fB"].forEach(id=>$(id).value="");render();};
-init();
+(function(){const raw=sg(KEY);if(!raw)return;
+ try{const o=JSON.parse(raw);S=o.sheets;
+  Object.values(S).forEach(a=>a.forEach(r=>r.dt=r.dt?new Date(r.dt):null));
+  META={f:o.f,at:o.at};show(o.def);}catch(e){}})();
+auto();
 </script>
 </body>
 </html>
